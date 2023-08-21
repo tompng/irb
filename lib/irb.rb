@@ -481,7 +481,55 @@ module IRB
       input
     end
 
+    @@running_thread = nil
+    @@running_irb = nil
+    @@waiting_irbs = []
+    module ::IRB::ExtendCommandBundle
+      def list_threads() = IRB::Irb.list_threads
+      def switch_thread() = IRB::Irb.switch_thread
+    end
+
+    def self.thread_inspect(irb, thread)
+      "Thread:#{thread.__id__}:(#{irb.context.main.inspect[0,16]})"
+    end
+
+    def self.list_threads
+      puts current: thread_inspect(@@running_irb, @@running_thread)
+      puts queue: @@waiting_irbs.map{thread_inspect _1, _2}
+    end
+
+    def self.switch_thread
+      if @@waiting_irbs.empty?
+        puts 'waiting threads empty'
+        return
+      end
+      q = Queue.new
+      current = @@running_irb
+      @@waiting_irbs << [current, Thread.current, q]
+      _irb, _t, q2 = @@waiting_irbs.shift
+      q2.enq nil
+      q.deq
+      puts "switch to #{thread_inspect current, Thread.current}"
+      @@running_thread = Thread.current
+      @@running_irb = current
+      nil
+    end
+
     def run(conf = IRB.conf)
+      if @@running_thread && @@running_thread != Thread.current
+        q = Queue.new
+        @@waiting_irbs << [self, Thread.current, q]
+        q.deq
+        puts "switch to #{Irb::thread_inspect self, Thread.current}"
+      end
+      @@running_thread = Thread.current
+      @@running_irb = self
+      _run(conf)
+      _irb, _t, q = @@waiting_irbs.shift
+      q&.enq nil
+    end
+
+    def _run(conf = IRB.conf)
       in_nested_session = !!conf[:MAIN_CONTEXT]
       conf[:IRB_RC].call(context) if conf[:IRB_RC]
       conf[:MAIN_CONTEXT] = context
