@@ -919,6 +919,61 @@ module IRB
     end
   end
 
+  class OutputFormatter
+    def initialize(output, format_pre, format_post, omit_proc:, newline_before_multiline_output:)
+      @format_pre = format_pre
+      @format_post = format_post
+      @output = output
+      @buffer = +''
+      @omit_proc = omit_proc
+      @passthrough = false
+      @newline_before_multiline_output = newline_before_multiline_output
+    end
+
+    def puts(text)
+      write(text + "\n")
+    end
+
+    def write(text)
+      if @passthrough
+        @output.write text
+        return
+      end
+
+      if text.include?("\n")
+        @buffer << text
+        multiline = text.count("\n") != text.bytesize
+      else
+        multiline = @buffer.end_with?("\n")
+        @buffer << text
+      end
+
+      if multiline
+        buf = "#{@format_pre}#{"\n" if @newline_before_multiline_output}#{@buffer}"
+        if @omit_proc
+          @output.write @omit_proc.call(buf)
+          raise IRB::Abort
+        else
+          @output.write buf
+          @passthrough = true
+        end
+      end
+    end
+
+    def flush
+      if @passthrough
+        @output.write @format_post
+        return
+      end
+
+      buf = "#{@format_pre}#{@buffer.chomp}#{@format_post}"
+      @output.write(@omit_proc ? @omit_proc.call(buf) : buf)
+    end
+
+    alias print write
+    alias << write
+  end
+
   class Irb
     # Note: instance and index assignment expressions could also be written like:
     # "foo.bar=(1)" and "foo.[]=(1, bar)", when expressed that way, the former be
@@ -1369,40 +1424,41 @@ module IRB
     end
 
     def output_value(omit = false) # :nodoc:
-      str = @context.inspect_last_value
-      multiline_p = str.include?("\n")
+      return_format_pre, return_format_post = @context.return_format.split('%s', 2)
+      return return_format_pre unless return_format_post
+
       if omit
-        winwidth = @context.io.winsize.last
-        if multiline_p
-          first_line = str.split("\n").first
-          result = @context.newline_before_multiline_output? ? (@context.return_format % first_line) : first_line
-          output_width = Reline::Unicode.calculate_width(result, true)
-          diff_size = output_width - Reline::Unicode.calculate_width(first_line, true)
-          if diff_size.positive? and output_width > winwidth
-            lines, _ = Reline::Unicode.split_by_width(first_line, winwidth - diff_size - 3)
-            str = "%s..." % lines.first
-            str += "\e[0m" if Color.colorable?
-            multiline_p = false
-          else
-            str = str.gsub(/(\A.*?\n).*/m, "\\1...")
-            str += "\e[0m" if Color.colorable?
+        omit_proc = ->(str) do
+          return str if str.empty?
+
+          lines = str.lines
+          winwidth = @context.io.winsize.last
+          truncate_line_index = @context.newline_before_multiline_output? && lines.size >= 2 ? 1 : 0
+          line = lines[truncate_line_index]
+          if Reline::Unicode.calculate_width(line, true) > winwidth
+            truncated_line = Reline::Unicode.split_by_width(line, winwidth - 3).first.first
+            line = "%s..." % truncated_line
+            line += "\e[0m" if Color.colorable?
+            lines[truncate_line_index] = line + "\n"
+            lines = lines.take(truncate_line_index + 1)
+          elsif lines.size > truncate_line_index + 1
+            line = "#{Color.colorable? ? "\e[0m" : ''}...\n"
+            lines = lines.take(truncate_line_index + 1) + [line]
           end
-        else
-          output_width = Reline::Unicode.calculate_width(@context.return_format % str, true)
-          diff_size = output_width - Reline::Unicode.calculate_width(str, true)
-          if diff_size.positive? and output_width > winwidth
-            lines, _ = Reline::Unicode.split_by_width(str, winwidth - diff_size - 3)
-            str = "%s..." % lines.first
-            str += "\e[0m" if Color.colorable?
-          end
+          lines.join
         end
       end
-
-      if multiline_p && @context.newline_before_multiline_output?
-        str = "\n" + str
+      Pager.page(retain_content: true) do |io|
+        formatter = OutputFormatter.new(
+          io,
+          return_format_pre,
+          return_format_post,
+          omit_proc: omit_proc,
+          newline_before_multiline_output: @context.newline_before_multiline_output?
+        )
+        @context.inspect_last_value(formatter)
+        formatter.flush
       end
-
-      Pager.page_content(format(@context.return_format, str), retain_content: true)
     end
 
     # Outputs the local variables to this current session, including #signal_status

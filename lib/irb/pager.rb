@@ -4,47 +4,64 @@ module IRB
   # The implementation of this class is borrowed from RDoc's lib/rdoc/ri/driver.rb.
   # Please do NOT use this class directly outside of IRB.
   class Pager
+    class Abort < StandardError
+    end
     PAGE_COMMANDS = [ENV['RI_PAGER'], ENV['PAGER'], 'less', 'more'].compact.uniq
 
-    class << self
-      def page_content(content, **options)
-        if content_exceeds_screen_height?(content)
-          page(**options) do |io|
-            io.puts content
-          end
-        else
-          $stdout.puts content
-        end
+    class IO
+      def initialize(**options)
+        @options = options
+        @buffer = +''
+        @io = should_page? ? nil : $stdout
       end
 
-      def page(retain_content: false)
-        if should_page? && pager = setup_pager(retain_content: retain_content)
-          begin
-            pid = pager.pid
-            yield pager
-          ensure
-            pager.close
-          end
+      def puts(text)
+        write(text + "\n")
+      end
+
+      def write(text)
+        if @io
+          @io.write(text)
         else
-          yield $stdout
-        end
-      # When user presses Ctrl-C, IRB would raise `IRB::Abort`
-      # But since Pager is implemented by running paging commands like `less` in another process with `IO.popen`,
-      # the `IRB::Abort` exception only interrupts IRB's execution but doesn't affect the pager
-      # So to properly terminate the pager with Ctrl-C, we need to catch `IRB::Abort` and kill the pager process
-      rescue IRB::Abort
-        begin
-          begin
-            Process.kill("TERM", pid) if pid
-          rescue Errno::EINVAL
-            # SIGTERM not supported (windows)
-            Process.kill("KILL", pid)
+          prev_bytesize = @buffer.bytesize
+          @buffer << text
+          if @buffer.bytesize / 1024 != prev_bytesize / 1024
+            prepare_pager if content_exceeds_screen_height?(@buffer)
           end
-        rescue Errno::ESRCH
-          # Pager process already terminated
         end
-        nil
       rescue Errno::EPIPE
+        raise Pager::Abort
+      end
+      alias print write
+      alias << write
+
+      def prepare_pager
+        @pager_io = setup_pager(**@options)
+        @pager_pid = @pager_io&.pid
+        @io = @pager_io || $stdout
+        @io.write @buffer
+      end
+
+      def close
+        unless @io
+          if content_exceeds_screen_height?(@buffer)
+            prepare_pager
+          else
+            $stdout.write @buffer
+          end
+        end
+        @pager_io&.close
+      end
+
+      def cleanup
+        begin
+          Process.kill("TERM", @pager_pid) if @pager_pid
+        rescue Errno::EINVAL
+          # SIGTERM not supported (windows)
+          Process.kill("KILL", @pager_pid)
+        end
+      rescue Errno::ESRCH
+        # Pager process already terminated
       end
 
       private
@@ -81,7 +98,7 @@ module IRB
           end
 
           begin
-            io = IO.popen(cmd, 'w')
+            io = ::IO.popen(cmd, 'w')
           rescue
             next
           end
@@ -94,6 +111,32 @@ module IRB
         end
 
         nil
+      end
+    end
+
+    class << self
+      def page_content(content, **options)
+        page(**options) do |io|
+          io.puts content
+        end
+      end
+
+      def page(retain_content: false)
+        io = Pager::IO.new(retain_content: retain_content)
+        begin
+          yield io
+        ensure
+          io.close
+        end
+      # When user presses Ctrl-C, IRB would raise `IRB::Abort`
+      # But since Pager is implemented by running paging commands like `less` in another process with `IO.popen`,
+      # the `IRB::Abort` exception only interrupts IRB's execution but doesn't affect the pager
+      # So to properly terminate the pager with Ctrl-C, we need to catch `IRB::Abort` and kill the pager process
+      rescue Pager::Abort
+      rescue IRB::Abort
+        io.cleanup
+        nil
+      rescue Errno::EPIPE
       end
     end
   end
