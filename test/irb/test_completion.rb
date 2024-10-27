@@ -230,13 +230,21 @@ module TestIRB
         "K".force_encoding(enc).to_sym
       rescue
       end
-      symbols += [:aiueo, :"aiu eo"]
-      candidates = completion_candidates(":a", binding)
-      assert_include(candidates, ":aiueo")
-      assert_not_include(candidates, ":aiu eo")
+      symbols += [:irb_test_symbol_aiueo, :"irb_test_symbol_aiu eo"]
+      candidates = completion_candidates(":irb_test_symbol_a", binding)
+      assert_include(candidates, ":irb_test_symbol_aiueo")
+      assert_not_include(candidates, ":irb_test_symbol_aiu eo")
       assert_empty(completion_candidates(":irb_unknown_symbol_abcdefg", binding))
       # Do not complete empty symbol for performance reason
       assert_empty(completion_candidates(":", binding))
+    end
+
+    def test_complete_symbol_limit
+      symbols = 200.times.map { :"irb_test_sym_limit_#{_1}" }.sort
+      candidates = completion_candidates(":irb_test_sym_lim", binding)
+      assert_equal(symbols.first.inspect, candidates.first)
+      assert_equal(symbols.last.inspect, candidates.last)
+      assert_equal(100, candidates.size)
     end
 
     def test_complete_invalid_three_colons

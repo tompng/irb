@@ -35,6 +35,8 @@ module IRB
 
     HELP_COMMAND_PREPOSING = /\Ahelp\s+/
 
+    MAX_CANDIDATES = 100
+
     def completion_candidates(preposing, target, postposing, bind:)
       raise NotImplementedError
     end
@@ -96,6 +98,17 @@ module IRB
       end
     end
 
+    def limit_candidates(candidates)
+      if candidates.size <= MAX_CANDIDATES
+        candidates.sort
+      else
+        # If candidates is 'aaaaa'...'aazzz' and we return the first 100 candidates 'aaaaa'...'aaadv',
+        # tab completion will complete the wrong common part 'aaa'. The actual common part is 'aa'.
+        # To avoid it, limited candidates should contain minimun value 'aaaa' and maximum value 'aazzz'.
+        candidates.min(MAX_CANDIDATES - MAX_CANDIDATES / 2) + candidates.max(MAX_CANDIDATES / 2).reverse
+      end
+    end
+
     def retrieve_files_to_require_relative_from_current_dir
       @files_from_current_dir ||= Dir.glob("**/*.{rb,#{RbConfig::CONFIG['DLEXT']}}", base: '.').map { |path|
         path.sub(/\.(rb|#{RbConfig::CONFIG['DLEXT']})\z/, '')
@@ -127,7 +140,7 @@ module IRB
 
       return commands unless result
 
-      commands | result.completion_candidates.map { target + _1 }
+      commands | limit_candidates(result.completion_candidates.map { target + _1 })
     end
 
     def doc_namespace(preposing, matched, _postposing, bind:)
@@ -212,7 +225,7 @@ module IRB
       commands = [] unless preposing.empty?
 
       completion_data = retrieve_completion_data(target, bind: bind, doc_namespace: false).compact.map{ |i| i.encode(Encoding.default_external) }
-      commands | completion_data
+      commands | limit_candidates(completion_data)
     end
 
     def doc_namespace(_preposing, matched, _postposing, bind:)
