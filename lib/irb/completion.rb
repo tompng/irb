@@ -140,23 +140,23 @@ module IRB
     using Module.new {
       refine ::Binding do
         def eval_methods
-          ::Kernel.instance_method(:methods).bind(eval("self")).call
+          ::Kernel.instance_method(:methods).bind_call(receiver)
         end
 
         def eval_private_methods
-          ::Kernel.instance_method(:private_methods).bind(eval("self")).call
+          ::Kernel.instance_method(:private_methods).bind_call(receiver)
         end
 
         def eval_instance_variables
-          ::Kernel.instance_method(:instance_variables).bind(eval("self")).call
+          ::Kernel.instance_method(:instance_variables).bind_call(receiver)
         end
 
         def eval_global_variables
-          ::Kernel.instance_method(:global_variables).bind(eval("self")).call
+          ::Kernel.instance_method(:global_variables).bind_call(receiver)
         end
 
         def eval_class_constants
-          ::Module.instance_method(:constants).bind(eval("self.class")).call
+          ::Module.instance_method(:constants).bind_call(receiver.class)
         end
       end
     }

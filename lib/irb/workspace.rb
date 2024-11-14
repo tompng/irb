@@ -61,7 +61,7 @@ EOF
       end
 
       if main.empty?
-        @main = eval("self", @binding)
+        @main = @binding.receiver
       else
         @main = main[0]
       end
