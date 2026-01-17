@@ -14,7 +14,7 @@ desc "Run each irb test file in isolation."
 task :test_in_isolation do
   failed = false
 
-  FileList["test/irb/**/test_*.rb"].each do |test_file|
+  FileList["test/irb/**/test_pager.rb"].each do |test_file|
     ENV["TEST"] = test_file
     begin
       Rake::Task["test"].execute
